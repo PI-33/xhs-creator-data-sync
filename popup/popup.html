@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { width: 260px; padding: 20px; font-family: -apple-system, sans-serif; text-align: center; }
+    h2 { font-size: 15px; color: #ff4757; margin-bottom: 8px; }
+    p { font-size: 12px; color: #666; line-height: 1.5; }
+    .btn { display: inline-block; margin-top: 12px; padding: 8px 20px; background: #ff4757; color: #fff;
+      border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .btn:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <h2>小红书 → 飞书</h2>
+  <p>请点击下方按钮打开侧边栏面板，面板会持续保持打开，不会因为点击其他地方而关闭。</p>
+  <button class="btn" id="openPanel">打开侧边栏</button>
+  <script>
+    document.getElementById('openPanel').addEventListener('click', async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      await chrome.sidePanel.open({ tabId: tab.id });
+      window.close();
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "小红书创作数据同步",
+  "version": "1.0.0",
+  "description": "将小红书创作服务平台数据同步至飞书多维表格",
+  "permissions": [
+    "storage",
+    "tabs",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://creator.xiaohongshu.com/*",
+    "https://open.feishu.cn/*"
+  ],
+  "side_panel": {
+    "default_path": "sidepanel/panel.html"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://creator.xiaohongshu.com/*"],
+      "js": ["inject/xhs-bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://creator.xiaohongshu.com/*"],
+      "js": ["lib/utils.js", "lib/xhs-api.js", "content/content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>小红书数据同步</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>小红书 → 飞书</h1>
+      <p class="subtitle">创作数据同步工具</p>
+    </header>
+
+    <!-- Step 1: Fetch & Preview -->
+    <section class="card">
+      <h2>1. 获取小红书数据</h2>
+      <p class="hint">请先在浏览器中打开并登录
+        <a href="https://creator.xiaohongshu.com" target="_blank">创作服务平台</a>
+      </p>
+
+      <div class="scope-select">
+        <div class="scope-options">
+          <label class="scope-chip"><input type="radio" name="scope" value="account" checked><span>账号概览</span></label>
+          <label class="scope-chip"><input type="radio" name="scope" value="notes"><span>内容分析</span></label>
+          <label class="scope-chip"><input type="radio" name="scope" value="fans"><span>粉丝数据</span></label>
+          <label class="scope-chip"><input type="radio" name="scope" value="all"><span>全部</span></label>
+        </div>
+      </div>
+
+      <button id="fetchBtn" class="btn btn-primary">获取数据</button>
+    </section>
+
+    <!-- Progress -->
+    <section id="progressCard" class="card" style="display:none">
+      <h2>进度</h2>
+      <div id="progressList" class="progress-list"></div>
+    </section>
+
+    <!-- Data Preview -->
+    <section id="previewCard" class="card" style="display:none">
+      <h2>数据预览</h2>
+      <div id="previewTabs" class="preview-tabs"></div>
+      <div id="previewContent" class="preview-content"></div>
+    </section>
+
+    <!-- Step 2: Feishu -->
+    <section id="feishuCard" class="card" style="display:none">
+      <h2>2. 同步到飞书多维表格</h2>
+      <div class="field">
+        <label>账号名称</label>
+        <input type="text" id="accountName" placeholder="自动获取，或手动填写">
+      </div>
+      <div class="field">
+        <label>飞书 App ID</label>
+        <input type="text" id="appId" placeholder="cli_xxxxxxxxxx">
+      </div>
+      <div class="field">
+        <label>飞书 App Secret</label>
+        <input type="password" id="appSecret" placeholder="xxxxxxxxxxxxxxxx">
+      </div>
+      <div class="field">
+        <label>多维表格链接</label>
+        <input type="text" id="bitableUrl" placeholder="https://xxx.feishu.cn/base/xxx">
+      </div>
+
+      <div class="table-mode-select">
+        <label class="table-mode-chip">
+          <input type="radio" name="tableMode" value="existing" checked>
+          <span>已有表，直接写数据</span>
+        </label>
+        <label class="table-mode-chip">
+          <input type="radio" name="tableMode" value="create">
+          <span>新建表（自动创建表和字段）</span>
+        </label>
+      </div>
+
+      <details class="advanced">
+        <summary>表名设置（可选）</summary>
+        <div class="field"><label>笔记数据表名</label><input type="text" id="noteTableName" placeholder="笔记数据"></div>
+        <div class="field"><label>账号数据表名</label><input type="text" id="accountTableName" placeholder="账号数据"></div>
+      </details>
+
+      <div class="btn-row">
+        <button id="saveBtn" class="btn btn-secondary">保存配置</button>
+        <button id="syncBtn" class="btn btn-primary">同步到飞书</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="panel.js"></script>
+</body>
+</html>
