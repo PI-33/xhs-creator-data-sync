@@ -386,6 +386,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (response.success) {
         const r = response.result;
         syncBtn.textContent = `完成 ✓ 新增${r.written} 更新${r.updated}`;
+        if (r.written > 0 || r.updated > 0) {
+          showInfo(`同步完成：新增 ${r.written} 条，更新 ${r.updated} 条`);
+          if (r.details?.notes) {
+            showInfo(`笔记数据：新增 ${r.details.notes.written} 条，更新 ${r.details.notes.updated} 条`);
+          }
+          if (r.details?.account) {
+            showInfo(`账号数据：新增 ${r.details.account.written} 条，更新 ${r.details.account.updated} 条`);
+          }
+        }
         if (r.errors?.length > 0) r.errors.forEach(e => showError(e));
         if (r.written === 0 && r.updated === 0 && r.errors.length === 0) {
           const scopes = r.debug?.receivedScopes || {};
