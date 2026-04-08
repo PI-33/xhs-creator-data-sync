@@ -87,6 +87,30 @@
         <button id="syncBtn" class="btn btn-primary">同步到飞书</button>
       </div>
     </section>
+    <!-- Step 3: Auto Sync -->
+    <section class="card" id="autoSyncCard">
+      <h2>3. 定时自动同步</h2>
+      <p class="hint">开启后每天自动获取数据并写入飞书（需保持 Chrome 运行）</p>
+
+      <div class="auto-sync-row">
+        <label class="toggle">
+          <input type="checkbox" id="autoSyncToggle">
+          <span class="toggle-slider"></span>
+        </label>
+        <span class="auto-sync-label">每天自动同步</span>
+        <div class="time-picker">
+          <input type="number" id="autoSyncHour" min="0" max="23" value="9" class="time-input">
+          <span>:</span>
+          <input type="number" id="autoSyncMinute" min="0" max="59" value="0" class="time-input">
+        </div>
+      </div>
+
+      <div id="syncStatusArea" class="sync-status" style="display:none">
+        <span id="syncStatusText"></span>
+      </div>
+
+      <button id="triggerSyncBtn" class="btn btn-secondary" style="width:100%;margin-top:8px">立即同步</button>
+    </section>
   </div>
 
   <script src="panel.js"></script>

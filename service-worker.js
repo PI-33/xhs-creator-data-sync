@@ -37,6 +37,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
+
+  if (message.type === 'SET_AUTO_SYNC') {
+    setupAutoSync(message.hour, message.minute)
+      .then(() => sendResponse({ success: true }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'CANCEL_AUTO_SYNC') {
+    cancelAutoSync()
+      .then(() => sendResponse({ success: true }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'GET_SYNC_STATUS') {
+    chrome.storage.local.get(['lastAutoSync'])
+      .then(data => sendResponse({ success: true, data: data.lastAutoSync || null }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'TRIGGER_AUTO_SYNC') {
+    autoSync()
+      .then(result => sendResponse({ success: true, result }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
 
 // ================================================================
@@ -318,15 +346,30 @@ async function writeNoteData(appToken, tableId, apiData, accountName) {
   const noteInfos = apiData.note_infos || apiData;
   if (!Array.isArray(noteInfos) || noteInfos.length === 0) return result;
 
+  // 按"笔记ID + 数据更新时间(年月日)"去重：同笔记同天覆盖，不同天新增
   const existingRecords = await getAllRecords(appToken, tableId);
   const existingMap = {};
   for (const r of existingRecords) {
     const noteId = r.fields['笔记ID'];
-    if (noteId) existingMap[noteId] = r.record_id;
+    const updateTs = r.fields['数据更新时间'];
+    const ts = typeof updateTs === 'number' ? updateTs : 0;
+    if (noteId) {
+      if (ts) {
+        existingMap[noteId + '_' + toDayStr(ts)] = r.record_id;
+      }
+      // 同时用纯 noteId 做兜底映射，确保即使日期不匹配也能更新而非新建
+      if (!existingMap['_latest_' + noteId] || ts > (existingMap['_latestTs_' + noteId] || 0)) {
+        existingMap['_latest_' + noteId] = r.record_id;
+        existingMap['_latestTs_' + noteId] = ts;
+      }
+    }
   }
 
   const toCreate = [];
   const toUpdate = [];
+  const now = Date.now();
+  const todayStr = toDayStr(now);
+  console.log('[XHS-Sync] writeNoteData: existing', existingRecords.length, 'records, map keys:', Object.keys(existingMap).filter(k => !k.startsWith('_')).length, ', today:', todayStr);
 
   for (const note of noteInfos) {
     const noteId = note.id;
@@ -343,7 +386,7 @@ async function writeNoteData(appToken, tableId, apiData, accountName) {
       '收藏数': Number(note.fav_count || 0),
       '分享数': Number(note.share_count || 0),
       '涨粉数': Number(note.increase_fans_count || 0),
-      '数据更新时间': Date.now(),
+      '数据更新时间': now,
     };
 
     if (note.coverClickRate != null) {
@@ -366,12 +409,17 @@ async function writeNoteData(appToken, tableId, apiData, accountName) {
       fields['审核状态'] = AUDIT_STATUS_MAP[note.audit_status];
     }
 
-    if (existingMap[noteId]) {
-      toUpdate.push({ record_id: existingMap[noteId], fields });
+    const deduKey = String(noteId) + '_' + todayStr;
+    // 优先按 noteId+日期 匹配（同天覆盖），兜底按 noteId 匹配最新记录（防止 getAllRecords 返回数据后日期不匹配时重复新建）
+    const matchedRecordId = existingMap[deduKey] || existingMap['_latest_' + String(noteId)];
+    if (matchedRecordId) {
+      toUpdate.push({ record_id: matchedRecordId, fields });
     } else {
       toCreate.push({ fields });
     }
   }
+
+  console.log('[XHS-Sync] writeNoteData: toCreate', toCreate.length, ', toUpdate', toUpdate.length);
 
   for (let i = 0; i < toCreate.length; i += 100) {
     const batch = toCreate.slice(i, i + 100);
@@ -462,6 +510,12 @@ function todayTs() {
   return d.getTime();
 }
 
+// 时间戳 → "YYYY-MM-DD"，用于按天去重
+function toDayStr(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
 // 按"账号名称 + 日期"去重：同账号同一天只保留一行
 async function upsertByDate(appToken, tableId, dateTs, fields, result) {
   const existingRecords = await getAllRecords(appToken, tableId);
@@ -482,6 +536,8 @@ async function upsertByDate(appToken, tableId, dateTs, fields, result) {
       break;
     }
   }
+
+  console.log('[XHS-Sync] upsertByDate: existing records', existingRecords.length, ', matched recordId:', existingRecordId, ', date range:', dayStartTs, '-', dayEndTs, ', account:', targetName);
 
   if (existingRecordId) {
     await FeishuApi.updateRecord(appToken, tableId, existingRecordId, fields);
@@ -505,10 +561,250 @@ async function getAllRecords(appToken, tableId) {
       pageToken = resp.page_token;
       retries = 0;
     } catch (e) {
+      console.error('[XHS-Sync] getAllRecords failed:', e.message, '(retry', retries + 1, '/ 3)');
       retries++;
-      if (retries >= 3) break;
+      if (retries >= 3) {
+        console.error('[XHS-Sync] getAllRecords gave up after 3 retries, returning', records.length, 'records so far');
+        break;
+      }
       await new Promise(r => setTimeout(r, 1000));
     }
   }
+  console.log('[XHS-Sync] getAllRecords returned', records.length, 'records for table', tableId);
   return records;
+}
+
+// ================================================================
+// 定时自动同步
+// ================================================================
+
+const AUTO_SYNC_ALARM = 'xhs-auto-sync';
+
+const AUTO_SCOPES = {
+  account: {
+    page: 'https://creator.xiaohongshu.com/statistics/account/v2',
+    triggerScope: 'account',
+  },
+  notes: {
+    page: 'https://creator.xiaohongshu.com/statistics/data-analysis',
+    triggerScope: 'notes',
+  },
+  fans: {
+    page: 'https://creator.xiaohongshu.com/statistics/fans-data',
+    triggerScope: 'fans',
+  },
+};
+
+// ---- Alarm 管理 ----
+
+async function setupAutoSync(hour, minute) {
+  await chrome.storage.local.set({ autoSyncEnabled: true, autoSyncHour: hour, autoSyncMinute: minute });
+
+  const now = new Date();
+  let target = new Date();
+  target.setHours(hour, minute, 0, 0);
+  if (target <= now) target.setDate(target.getDate() + 1);
+
+  const delayMs = target.getTime() - now.getTime();
+  await chrome.alarms.create(AUTO_SYNC_ALARM, {
+    delayInMinutes: delayMs / 60000,
+    periodInMinutes: 24 * 60,
+  });
+  console.log('[XHS-Sync] Auto-sync alarm set for', target.toLocaleString(), '(every 24h)');
+}
+
+async function cancelAutoSync() {
+  await chrome.alarms.clear(AUTO_SYNC_ALARM);
+  await chrome.storage.local.set({ autoSyncEnabled: false });
+  console.log('[XHS-Sync] Auto-sync alarm cancelled');
+}
+
+// 扩展安装/更新时恢复 alarm
+chrome.runtime.onInstalled.addListener(async () => {
+  const data = await chrome.storage.local.get(['autoSyncEnabled', 'autoSyncHour', 'autoSyncMinute']);
+  if (data.autoSyncEnabled && data.autoSyncHour != null) {
+    await setupAutoSync(data.autoSyncHour, data.autoSyncMinute);
+  }
+});
+
+// Alarm 触发
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === AUTO_SYNC_ALARM) {
+    console.log('[XHS-Sync] Auto-sync alarm fired at', new Date().toLocaleString());
+    await autoSync();
+  }
+});
+
+// ---- 编排函数 ----
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function findOrCreateXhsTab() {
+  const tabs = await chrome.tabs.query({ url: 'https://creator.xiaohongshu.com/*' });
+  if (tabs.length > 0) return tabs[0];
+
+  console.log('[XHS-Sync] No XHS tab found, creating one...');
+  const tab = await chrome.tabs.create({ url: 'https://creator.xiaohongshu.com/statistics/account/v2', active: false });
+  await waitForTabComplete(tab.id, 30000);
+  return tab;
+}
+
+function waitForTabComplete(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, timeoutMs);
+    function listener(id, info) {
+      if (id === tabId && info.status === 'complete') {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+async function waitForContentScript(tabId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const resp = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+      if (resp?.success) return true;
+    } catch (e) {}
+    await sleep(500);
+  }
+  return false;
+}
+
+async function autoFetchOneScope(scopeKey, tab) {
+  const scope = AUTO_SCOPES[scopeKey];
+  if (!scope) return {};
+
+  console.log('[XHS-Sync] Auto-fetch:', scopeKey);
+
+  // 导航到目标页面
+  const currentPath = new URL(tab.url).pathname;
+  const targetPath = new URL(scope.page).pathname;
+
+  if (currentPath !== targetPath) {
+    await chrome.tabs.update(tab.id, { url: scope.page });
+  } else {
+    await chrome.tabs.reload(tab.id);
+  }
+
+  await waitForTabComplete(tab.id, 20000);
+
+  // 等待 content script 加载
+  const csReady = await waitForContentScript(tab.id, 15000);
+  if (!csReady) {
+    console.warn('[XHS-Sync] Auto-fetch: content script not ready for', scopeKey);
+    return {};
+  }
+
+  // 触发 JSON API
+  await sleep(3000);
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'TRIGGER_JSON_API', scope: scope.triggerScope });
+  } catch (e) {
+    console.warn('[XHS-Sync] Auto-fetch: trigger failed for', scopeKey, e.message);
+  }
+  await sleep(3000);
+
+  // 笔记翻页
+  if (scopeKey === 'notes') {
+    try {
+      const pageResp = await chrome.tabs.sendMessage(tab.id, { type: 'PAGINATE_NOTES' });
+      if (pageResp?.pagesLoaded > 0) {
+        console.log('[XHS-Sync] Auto-fetch: paginated', pageResp.pagesLoaded, 'pages');
+      }
+    } catch (e) {
+      console.warn('[XHS-Sync] Auto-fetch: paginate failed', e.message);
+    }
+    await sleep(2000);
+  }
+
+  // 收集缓存数据
+  let cachedData = {};
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    await sleep(attempt <= 3 ? 2000 : 3000);
+    try {
+      const resp = await chrome.tabs.sendMessage(tab.id, { type: 'GET_ALL_CACHED' });
+      if (resp?.success && resp.data && Object.keys(resp.data).length > 0) {
+        cachedData = resp.data;
+        break;
+      }
+    } catch (e) {}
+  }
+
+  const count = Object.keys(cachedData).length;
+  console.log('[XHS-Sync] Auto-fetch:', scopeKey, '- intercepted', count, 'APIs');
+  return cachedData;
+}
+
+// ---- 自动同步主函数 ----
+
+async function autoSync() {
+  console.log('[XHS-Sync] === Auto-sync started ===');
+  const syncResult = { time: Date.now(), success: false, written: 0, updated: 0, errors: [] };
+
+  try {
+    // 读取飞书配置
+    const config = await chrome.storage.local.get([
+      'appId', 'appSecret', 'bitableUrl', 'noteTableName', 'accountTableName', 'accountName'
+    ]);
+
+    if (!config.appId || !config.appSecret || !config.bitableUrl) {
+      throw new Error('飞书配置不完整，请在侧边栏设置 App ID、App Secret 和多维表格链接');
+    }
+
+    const feishuConfig = {
+      appId: config.appId,
+      appSecret: config.appSecret,
+      bitableUrl: config.bitableUrl,
+      noteTableName: config.noteTableName || '笔记数据',
+      accountTableName: config.accountTableName || '账号数据',
+      accountName: config.accountName || '',
+    };
+
+    // 找到或创建 XHS tab
+    const tab = await findOrCreateXhsTab();
+    // 刷新 tab 信息（create 后 url 可能还没更新）
+    const freshTab = await chrome.tabs.get(tab.id);
+
+    // 依次抓取三类数据
+    const result = {};
+    for (const sk of ['account', 'notes', 'fans']) {
+      result[sk] = await autoFetchOneScope(sk, freshTab);
+    }
+
+    // 自动提取账号名称
+    if (!feishuConfig.accountName) {
+      for (const scopeData of Object.values(result)) {
+        if (!scopeData || typeof scopeData !== 'object') continue;
+        for (const resp of Object.values(scopeData)) {
+          const d = resp?.data || resp;
+          if (d?.userName) {
+            feishuConfig.accountName = d.userName;
+            await chrome.storage.local.set({ accountName: d.userName });
+            break;
+          }
+        }
+        if (feishuConfig.accountName) break;
+      }
+    }
+
+    // 写入飞书
+    const writeResult = await handleWriteToFeishu(feishuConfig, result);
+    syncResult.success = true;
+    syncResult.written = writeResult.written;
+    syncResult.updated = writeResult.updated;
+    syncResult.errors = writeResult.errors || [];
+
+    console.log('[XHS-Sync] === Auto-sync completed: written', writeResult.written, 'updated', writeResult.updated, '===');
+  } catch (err) {
+    syncResult.errors.push(err.message);
+    console.error('[XHS-Sync] === Auto-sync failed:', err.message, '===');
+  }
+
+  await chrome.storage.local.set({ lastAutoSync: syncResult });
+  return syncResult;
 }

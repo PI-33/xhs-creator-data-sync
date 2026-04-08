@@ -446,4 +446,99 @@ document.addEventListener('DOMContentLoaded', async () => {
   function escapeHtml(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
+
+  // ===== Auto Sync =====
+  const autoSyncToggle = document.getElementById('autoSyncToggle');
+  const autoSyncHour = document.getElementById('autoSyncHour');
+  const autoSyncMinute = document.getElementById('autoSyncMinute');
+  const triggerSyncBtn = document.getElementById('triggerSyncBtn');
+  const syncStatusArea = document.getElementById('syncStatusArea');
+  const syncStatusText = document.getElementById('syncStatusText');
+
+  // 加载已保存的自动同步设置
+  const autoSyncSaved = await chrome.storage.local.get(['autoSyncEnabled', 'autoSyncHour', 'autoSyncMinute']);
+  if (autoSyncSaved.autoSyncEnabled) autoSyncToggle.checked = true;
+  if (autoSyncSaved.autoSyncHour != null) autoSyncHour.value = autoSyncSaved.autoSyncHour;
+  if (autoSyncSaved.autoSyncMinute != null) autoSyncMinute.value = String(autoSyncSaved.autoSyncMinute).padStart(2, '0');
+
+  // 开关切换
+  autoSyncToggle.addEventListener('change', async () => {
+    if (autoSyncToggle.checked) {
+      const h = parseInt(autoSyncHour.value) || 9;
+      const m = parseInt(autoSyncMinute.value) || 0;
+      const resp = await chrome.runtime.sendMessage({ type: 'SET_AUTO_SYNC', hour: h, minute: m });
+      if (resp?.success) {
+        updateSyncStatusUI(`已设置：每天 ${pad(h)}:${pad(m)} 自动同步`, 'success');
+      } else {
+        updateSyncStatusUI('设置失败: ' + (resp?.error || '未知错误'), 'error');
+        autoSyncToggle.checked = false;
+      }
+    } else {
+      await chrome.runtime.sendMessage({ type: 'CANCEL_AUTO_SYNC' });
+      updateSyncStatusUI('自动同步已关闭', '');
+    }
+  });
+
+  // 时间变更时自动更新 alarm
+  async function onTimeChange() {
+    if (!autoSyncToggle.checked) return;
+    const h = parseInt(autoSyncHour.value) || 9;
+    const m = parseInt(autoSyncMinute.value) || 0;
+    await chrome.runtime.sendMessage({ type: 'SET_AUTO_SYNC', hour: h, minute: m });
+    updateSyncStatusUI(`已更新：每天 ${pad(h)}:${pad(m)} 自动同步`, 'success');
+  }
+  autoSyncHour.addEventListener('change', onTimeChange);
+  autoSyncMinute.addEventListener('change', onTimeChange);
+
+  // 手动触发
+  triggerSyncBtn.addEventListener('click', async () => {
+    triggerSyncBtn.disabled = true;
+    triggerSyncBtn.textContent = '同步中...';
+    updateSyncStatusUI('正在执行自动同步...', '');
+
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'TRIGGER_AUTO_SYNC' });
+      if (resp?.success) {
+        const r = resp.result;
+        if (r.success) {
+          updateSyncStatusUI(`同步完成：新增 ${r.written} 条，更新 ${r.updated} 条`, 'success');
+        } else {
+          updateSyncStatusUI('同步失败: ' + (r.errors?.join('; ') || '未知错误'), 'error');
+        }
+      } else {
+        updateSyncStatusUI('同步失败: ' + (resp?.error || '未知错误'), 'error');
+      }
+    } catch (err) {
+      updateSyncStatusUI('同步失败: ' + err.message, 'error');
+    } finally {
+      triggerSyncBtn.disabled = false;
+      triggerSyncBtn.textContent = '立即同步';
+    }
+  });
+
+  // 加载上次同步状态
+  loadLastSyncStatus();
+
+  async function loadLastSyncStatus() {
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'GET_SYNC_STATUS' });
+      if (resp?.success && resp.data) {
+        const s = resp.data;
+        const timeStr = new Date(s.time).toLocaleString('zh-CN');
+        if (s.success) {
+          updateSyncStatusUI(`上次同步：${timeStr}（新增 ${s.written}，更新 ${s.updated}）`, 'success');
+        } else {
+          updateSyncStatusUI(`上次同步失败：${timeStr}（${s.errors?.join('; ') || ''}）`, 'error');
+        }
+      }
+    } catch (e) {}
+  }
+
+  function updateSyncStatusUI(text, type) {
+    syncStatusArea.style.display = 'block';
+    syncStatusArea.className = 'sync-status' + (type ? ' ' + type : '');
+    syncStatusText.textContent = text;
+  }
+
+  function pad(n) { return String(n).padStart(2, '0'); }
 });
