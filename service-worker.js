@@ -346,22 +346,15 @@ async function writeNoteData(appToken, tableId, apiData, accountName) {
   const noteInfos = apiData.note_infos || apiData;
   if (!Array.isArray(noteInfos) || noteInfos.length === 0) return result;
 
-  // 按"笔记ID + 数据更新时间(年月日)"去重：同笔记同天覆盖，不同天新增
+  // 按"笔记ID + 数据更新时间(年月日)"去重：同笔记同天覆盖，不同天新增（保留每日快照）
   const existingRecords = await getAllRecords(appToken, tableId);
   const existingMap = {};
   for (const r of existingRecords) {
     const noteId = r.fields['笔记ID'];
     const updateTs = r.fields['数据更新时间'];
     const ts = typeof updateTs === 'number' ? updateTs : 0;
-    if (noteId) {
-      if (ts) {
-        existingMap[noteId + '_' + toDayStr(ts)] = r.record_id;
-      }
-      // 同时用纯 noteId 做兜底映射，确保即使日期不匹配也能更新而非新建
-      if (!existingMap['_latest_' + noteId] || ts > (existingMap['_latestTs_' + noteId] || 0)) {
-        existingMap['_latest_' + noteId] = r.record_id;
-        existingMap['_latestTs_' + noteId] = ts;
-      }
+    if (noteId && ts) {
+      existingMap[noteId + '_' + toDayStr(ts)] = r.record_id;
     }
   }
 
@@ -369,7 +362,7 @@ async function writeNoteData(appToken, tableId, apiData, accountName) {
   const toUpdate = [];
   const now = Date.now();
   const todayStr = toDayStr(now);
-  console.log('[XHS-Sync] writeNoteData: existing', existingRecords.length, 'records, map keys:', Object.keys(existingMap).filter(k => !k.startsWith('_')).length, ', today:', todayStr);
+  console.log('[XHS-Sync] writeNoteData: existing', existingRecords.length, 'records, dedup keys:', Object.keys(existingMap).length, ', today:', todayStr);
 
   for (const note of noteInfos) {
     const noteId = note.id;
@@ -410,9 +403,7 @@ async function writeNoteData(appToken, tableId, apiData, accountName) {
     }
 
     const deduKey = String(noteId) + '_' + todayStr;
-    // 优先按 noteId+日期 匹配（同天覆盖），兜底按 noteId 匹配最新记录（防止 getAllRecords 返回数据后日期不匹配时重复新建）
-    const matchedRecordId = existingMap[deduKey] || existingMap['_latest_' + String(noteId)];
-    if (matchedRecordId) {
+    if (existingMap[deduKey]) {
       toUpdate.push({ record_id: matchedRecordId, fields });
     } else {
       toCreate.push({ fields });
