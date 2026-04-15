@@ -404,7 +404,7 @@ async function writeNoteData(appToken, tableId, apiData, accountName) {
 
     const deduKey = String(noteId) + '_' + todayStr;
     if (existingMap[deduKey]) {
-      toUpdate.push({ record_id: matchedRecordId, fields });
+      toUpdate.push({ record_id: existingMap[deduKey], fields });
     } else {
       toCreate.push({ fields });
     }
